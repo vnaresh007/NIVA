@@ -1,4 +1,4 @@
-# NAIVA - Multi Model AI Comparator
+# NIVA - Multi Model AI Comparator
 # ---------------------------------
 # Enhanced UI Version with proper descriptions and usability
 
@@ -16,7 +16,7 @@ load_dotenv()
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
-    page_title="NAIVA - AI Comparator",
+    page_title="NIVA - AI Comparator",
     page_icon="🤖",
     layout="wide"
 )
