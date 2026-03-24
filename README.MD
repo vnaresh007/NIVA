@@ -1,4 +1,4 @@
-# 🤖 NAIVA - AI Model Comparator
+# 🤖 NIVA - AI Model Comparator
 
 NAIVA is a simple and powerful web application that allows you to compare responses from multiple AI models like ChatGPT and Gemini in real-time.
 
