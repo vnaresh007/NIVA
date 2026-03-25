@@ -1,4 +1,4 @@
-# NIVA - Multi Model AI Comparator
+# NIIVA - Multi Model AI Comparator
 # ---------------------------------
 # Enhanced UI Version with proper descriptions and usability
 
@@ -16,7 +16,7 @@ load_dotenv()
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
-    page_title="NIVA - AI Comparator",
+    page_title="NIIVA - AI Comparator",
     page_icon="🤖",
     layout="wide"
 )
@@ -43,11 +43,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------- HEADER ----------------
-st.markdown('<div class="main-title">🤖 NAIVA</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">🤖 NIIVA</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Next-Gen AI Model Comparison Platform</div>', unsafe_allow_html=True)
 
 st.markdown("""
-### 🚀 About NAIVA
+### 🚀 About NIIVA
 NAIVA helps you compare multiple AI models like ChatGPT and Gemini in real-time.
 
 🔍 **What you can do:**
