@@ -180,7 +180,7 @@ def compare_models(prompt: str, domain: str) -> List[ModelResponse]:
 
     return results
 
-# ---------------- RESULTS ----------------
+# ---------------- RESULTS (UPDATED UI) ----------------
 if run_btn:
     if not user_input.strip():
         st.warning("Enter a prompt")
@@ -189,31 +189,43 @@ if run_btn:
             results = compare_models(user_input, domain)
 
         if results:
-            st.markdown("## 📊 Results")
-            cols = st.columns(len(results))
+            st.markdown("## 📊 Model Comparison Results")
 
-            for i, res in enumerate(results):
-                with cols[i]:
-                    st.markdown(f"### {res.model_name}")
-                    st.metric("⚡ Latency", f"{res.latency:.2f}s")
-                    st.metric("🔢 Tokens", res.tokens_used)
-                    st.metric("🎯 Relevance", f"{res.relevance_score:.2f}")
-                    st.metric("🏆 Final Score", f"{res.final_score:.3f}")
-
-                    st.write(res.response_text)
-
-                    with st.expander("Debug"):
-                        st.json(res.raw_response)
-
-            # Insights
             fastest = min(results, key=lambda x: x.latency)
             cheapest = min(results, key=lambda x: x.tokens_used)
             best = max(results, key=lambda x: x.final_score)
 
+            for res in results:
+                st.markdown("---")
+                st.markdown(f"## 🤖 {res.model_name}")
+
+                col1, col2, col3, col4 = st.columns(4)
+
+                col1.metric("⚡ Latency", f"{res.latency:.2f}s")
+                col2.metric("🔢 Tokens", res.tokens_used)
+                col3.metric("🎯 Relevance", f"{res.relevance_score:.2f}")
+                col4.metric("🏆 Score", f"{res.final_score:.3f}")
+
+                if res.model_name == fastest.model_name:
+                    st.success("⚡ Fastest Model")
+
+                if res.model_name == cheapest.model_name:
+                    st.info("💰 Most Cost Efficient")
+
+                if res.model_name == best.model_name:
+                    st.success("🏆 Best Overall Model")
+
+                st.markdown("### 💬 Response")
+                st.write(res.response_text)
+
+                with st.expander("🛠 Debug Data"):
+                    st.json(res.raw_response)
+
             st.markdown("---")
-            st.success(f"⚡ Fastest: {fastest.model_name}")
-            st.info(f"💰 Cheapest: {cheapest.model_name}")
-            st.success(f"🏆 Best Overall: {best.model_name}")
+            st.markdown("## 🧠 Final Insights")
+            st.success(f"🏆 Best Overall Model: {best.model_name}")
+            st.info(f"⚡ Fastest Model: {fastest.model_name}")
+            st.info(f"💰 Most Cost Efficient: {cheapest.model_name}")
 
         else:
             st.error("No responses received")
