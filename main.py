@@ -1,7 +1,3 @@
-# NIIVA - Multi Model AI Comparator
-# ---------------------------------
-# Enhanced UI Version with proper descriptions and usability
-
 import streamlit as st
 import time
 import requests
@@ -10,9 +6,7 @@ from typing import List, Any
 import os
 from dotenv import load_dotenv
 
-
 load_dotenv()
-
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
@@ -21,50 +15,25 @@ st.set_page_config(
     layout="wide"
 )
 
-# ---------------- CUSTOM STYLING ----------------
-st.markdown("""
-    <style>
-    .main-title {
-        font-size: 42px;
-        font-weight: bold;
-        color: #4CAF50;
-    }
-    .subtitle {
-        font-size: 18px;
-        color: #888;
-    }
-    .card {
-        padding: 15px;
-        border-radius: 12px;
-        background-color: #111;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-    }
-    </style>
-""", unsafe_allow_html=True)
-
 # ---------------- HEADER ----------------
-st.markdown('<div class="main-title">🤖 NIIVA</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">Next-Gen AI Model Comparison Platform</div>', unsafe_allow_html=True)
+st.markdown("# 🤖 NIIVA")
+st.markdown("### AI Model Evaluation & Comparison Platform")
 
-st.markdown("""
-### 🚀 About NIIVA
-NAIVA helps you compare multiple AI models like ChatGPT and Gemini in real-time.
+# ---------------- DOMAIN SELECTION ----------------
+st.markdown("### 🌐 Select Domain")
+domain = st.selectbox(
+    "Choose domain:",
+    ["General", "Healthcare", "Finance", "Legal", "Coding"]
+)
 
-🔍 **What you can do:**
-- Compare responses from different AI models
-- Analyze latency (speed)
-- Track token usage (cost efficiency)
-- View raw backend responses for debugging
-
-💡 Ideal for developers, researchers, and AI enthusiasts.
-""")
-
-st.markdown("---")
+# ---------------- INPUT ----------------
+st.markdown("### 🧠 Enter Prompt")
+user_input = st.text_area("Type your query:", height=120)
+run_btn = st.button("🚀 Run Comparison")
 
 # ---------------- API CONFIG ----------------
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"]
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets["GEMINI_API_KEY"]
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
@@ -77,9 +46,57 @@ class ModelResponse:
     latency: float
     tokens_used: int
     raw_response: Any
+    relevance_score: float = 0.0
+    final_score: float = 0.0
+
+# ---------------- LLM RELEVANCE ----------------
+def llm_relevance_score(prompt: str, response: str, domain: str) -> float:
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        eval_prompt = f"""
+You are an expert evaluator.
+
+Rate how relevant the response is to the given domain.
+
+Domain: {domain}
+User Prompt: {prompt}
+Model Response: {response}
+
+Return ONLY a number between 0 and 1.
+"""
+
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": eval_prompt}],
+            "max_tokens": 10
+        }
+
+        res = requests.post(OPENAI_URL, headers=headers, json=payload)
+        data = res.json()
+
+        score_text = data["choices"][0]["message"]["content"].strip()
+        return float(score_text)
+
+    except:
+        return 0.0
+
+# ---------------- FINAL SCORE ----------------
+def compute_final_score(res: ModelResponse) -> float:
+    latency_score = 1 / (res.latency + 0.01)
+    token_score = 1 / (res.tokens_used + 1)
+
+    return (
+        0.5 * res.relevance_score +
+        0.3 * latency_score +
+        0.2 * token_score
+    )
 
 # ---------------- CHATGPT ----------------
-def call_chatgpt(prompt: str):
+def call_chatgpt(prompt: str, domain: str):
     try:
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -88,7 +105,10 @@ def call_chatgpt(prompt: str):
 
         payload = {
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": f"You are an expert in {domain}."},
+                {"role": "user", "content": prompt}
+            ],
             "max_tokens": 200
         }
 
@@ -98,7 +118,7 @@ def call_chatgpt(prompt: str):
 
         data = response.json()
 
-        text = data.get("choices", [{}])[0].get("message", {}).get("content", "Error in response")
+        text = data.get("choices", [{}])[0].get("message", {}).get("content", "Error")
         tokens = data.get("usage", {}).get("total_tokens", 0)
 
         return ModelResponse("ChatGPT", text, latency, tokens, data)
@@ -108,12 +128,14 @@ def call_chatgpt(prompt: str):
         return None
 
 # ---------------- GEMINI ----------------
-def call_gemini(prompt: str):
+def call_gemini(prompt: str, domain: str):
     try:
         headers = {"Content-Type": "application/json"}
 
         payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{
+                "parts": [{"text": f"[Domain: {domain}] {prompt}"}]
+            }],
             "generationConfig": {
                 "temperature": 0.7,
                 "maxOutputTokens": 200
@@ -130,7 +152,7 @@ def call_gemini(prompt: str):
             data.get("candidates", [{}])[0]
             .get("content", {})
             .get("parts", [{}])[0]
-            .get("text", "Error in response")
+            .get("text", "Error")
         )
 
         tokens = data.get("usageMetadata", {}).get("totalTokenCount", 0)
@@ -142,72 +164,60 @@ def call_gemini(prompt: str):
         return None
 
 # ---------------- COMPARISON ----------------
-def compare_models(prompt: str) -> List[ModelResponse]:
+def compare_models(prompt: str, domain: str) -> List[ModelResponse]:
     results = []
 
-    gpt = call_chatgpt(prompt)
-    gemini = call_gemini(prompt)
+    gpt = call_chatgpt(prompt, domain)
+    gemini = call_gemini(prompt, domain)
 
-    if gpt:
-        results.append(gpt)
-    if gemini:
-        results.append(gemini)
+    for model in [gpt, gemini]:
+        if model:
+            model.relevance_score = llm_relevance_score(
+                prompt, model.response_text, domain
+            )
+            model.final_score = compute_final_score(model)
+            results.append(model)
 
     return results
-
-# ---------------- INPUT SECTION ----------------
-st.markdown("### 🧠 Enter Your Prompt")
-user_input = st.text_area("Type your question or task:", height=120, placeholder="Example: Explain AI in simple terms")
-
-run_btn = st.button("🚀 Run Comparison")
 
 # ---------------- RESULTS ----------------
 if run_btn:
     if not user_input.strip():
-        st.warning("⚠️ Please enter a prompt")
+        st.warning("Enter a prompt")
     else:
-        with st.spinner("Analyzing models..."):
-            results = compare_models(user_input)
+        with st.spinner("Running models..."):
+            results = compare_models(user_input, domain)
 
-        if len(results) == 0:
-            st.error("❌ No valid responses. Check API keys.")
-        else:
-            st.markdown("---")
-            st.markdown("## 📊 Model Comparison Results")
-
+        if results:
+            st.markdown("## 📊 Results")
             cols = st.columns(len(results))
 
             for i, res in enumerate(results):
                 with cols[i]:
                     st.markdown(f"### {res.model_name}")
-                    st.metric("⚡ Latency", f"{res.latency:.2f} sec")
+                    st.metric("⚡ Latency", f"{res.latency:.2f}s")
                     st.metric("🔢 Tokens", res.tokens_used)
+                    st.metric("🎯 Relevance", f"{res.relevance_score:.2f}")
+                    st.metric("🏆 Final Score", f"{res.final_score:.3f}")
 
-                    st.markdown("#### 💬 Response")
                     st.write(res.response_text)
 
-                    st.markdown("#### 🛠 Debug Data")
-                    with st.expander("View Raw Response"):
+                    with st.expander("Debug"):
                         st.json(res.raw_response)
 
-            if len(results) > 1:
-                fastest = min(results, key=lambda x: x.latency)
-                cheapest = min(results, key=lambda x: x.tokens_used)
+            # Insights
+            fastest = min(results, key=lambda x: x.latency)
+            cheapest = min(results, key=lambda x: x.tokens_used)
+            best = max(results, key=lambda x: x.final_score)
 
-                st.markdown("---")
-                st.markdown("## 🏆 Insights")
-                st.success(f"⚡ Fastest Model: {fastest.model_name}")
-                st.info(f"💰 Most Efficient (Tokens): {cheapest.model_name}")
+            st.markdown("---")
+            st.success(f"⚡ Fastest: {fastest.model_name}")
+            st.info(f"💰 Cheapest: {cheapest.model_name}")
+            st.success(f"🏆 Best Overall: {best.model_name}")
+
+        else:
+            st.error("No responses received")
 
 # ---------------- FOOTER ----------------
 st.markdown("---")
-st.markdown("""
-### 📌 How to Use
-1. Enter your prompt
-2. Click **Run Comparison**
-3. View results side-by-side
-4. Expand debug section if needed
-
----
-Built with ❤️ by NAIVA Team
-""")
+st.markdown("Built with ❤️ by NIIVA")
