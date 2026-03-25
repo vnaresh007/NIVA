@@ -5,35 +5,195 @@ from dataclasses import dataclass
 from typing import List, Any
 import os
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor
 
 load_dotenv()
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(
-    page_title="NIIVA - AI Comparator",
-    page_icon="🤖",
-    layout="wide"
-)
+st.set_page_config(page_title="NIIVA", layout="wide")
+st.title("🤖 NIIVA - AI Decision Engine")
 
-# ---------------- HEADER ----------------
-st.markdown("# 🤖 NIIVA")
-st.markdown("### Multi-Factor AI Model Evaluation Platform")
+user_input = st.text_area("Enter your prompt")
+run_btn = st.button("Run")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+
+# ---------------- DATA ----------------
+@dataclass
+class ModelResponse:
+    model_name: str
+    response_text: str
+    latency: float
+    tokens_used: int
+    raw_response: Any
+    relevance_score: float = 0.0
+    latency_score: float = 0.0
+    cost_score: float = 0.0
+    final_score: float = 0.0
+
+# ---------------- RETRY ----------------
+def safe_request(url, headers=None, json=None, retries=2):
+    for _ in range(retries):
+        try:
+            res = requests.post(url, headers=headers, json=json, timeout=10)
+            if res.status_code == 200:
+                return res
+        except:
+            time.sleep(1)
+    return None
 
 # ---------------- DOMAIN ----------------
-domain = st.selectbox(
-    "🌐 Select Domain:",
-    ["General", "Healthcare", "Finance", "Legal", "Coding"]
-)
+def detect_domain(prompt):
+    res = safe_request(
+        OPENAI_URL,
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": f"Classify: {prompt} into Healthcare, Finance, Legal, Coding, General"}],
+            "max_tokens": 5
+        }
+    )
+    if not res:
+        return "General"
 
-# ---------------- WEIGHTS (IMPORTANT) ----------------
-st.markdown("### ⚖️ Scoring Weights")
+    try:
+        return res.json()["choices"][0]["message"]["content"].strip()
+    except:
+        return "General"
 
-col1, col2, col3 = st.columns(3)
-w_relevance = col1.slider("Relevance", 0.0, 1.0, 0.5)
-w_latency = col2.slider("Latency", 0.0, 1.0, 0.3)
-w_cost = col3.slider("Cost", 0.0, 1.0, 0.2)
+# ---------------- RELEVANCE ----------------
+def relevance(prompt, response, domain):
+    res = safe_request(
+        OPENAI_URL,
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": f"Score relevance 0-1\nDomain:{domain}\nPrompt:{prompt}\nResponse:{response}"}],
+            "max_tokens": 10
+        }
+    )
+    try:
+        return float(res.json()["choices"][0]["message"]["content"])
+    except:
+        return 0.0
 
-# Normalize weights
+# ---------------- MODELS ----------------
+def chatgpt(prompt, domain):
+    start = time.time()
+
+    res = safe_request(
+        OPENAI_URL,
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "content": f"Expert in {domain}"},
+                {"role": "user", "content": prompt}
+            ]
+        }
+    )
+
+    latency = time.time() - start
+    if not res:
+        return None
+
+    data = res.json()
+
+    return ModelResponse(
+        "ChatGPT",
+        data.get("choices", [{}])[0].get("message", {}).get("content", ""),
+        latency,
+        data.get("usage", {}).get("total_tokens", 0),
+        data
+    )
+
+
+def gemini(prompt, domain):
+    start = time.time()
+
+    res = safe_request(
+        GEMINI_URL,
+        json={"contents": [{"parts": [{"text": f"[{domain}] {prompt}"}]}]}
+    )
+
+    latency = time.time() - start
+    if not res:
+        return None
+
+    data = res.json()
+
+    return ModelResponse(
+        "Gemini",
+        data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", ""),
+        latency,
+        data.get("usageMetadata", {}).get("totalTokenCount", 0),
+        data
+    )
+
+# ---------------- SCORING ----------------
+def score(results):
+    max_lat = max(r.latency for r in results)
+    max_tok = max(r.tokens_used for r in results)
+
+    for r in results:
+        r.latency_score = 1 - (r.latency / max_lat if max_lat else 0)
+        r.cost_score = 1 - (r.tokens_used / max_tok if max_tok else 0)
+
+        r.final_score = (
+            0.5 * r.relevance_score +
+            0.3 * r.latency_score +
+            0.2 * r.cost_score
+        )
+
+# ---------------- MAIN ----------------
+if run_btn and user_input:
+
+    with st.spinner("Processing..."):
+
+        domain = detect_domain(user_input)
+        st.info(f"Detected Domain: {domain}")
+
+        # PARALLEL CALLS
+        with ThreadPoolExecutor() as executor:
+            gpt_future = executor.submit(chatgpt, user_input, domain)
+            gem_future = executor.submit(gemini, user_input, domain)
+
+            gpt = gpt_future.result()
+            gem = gem_future.result()
+
+        results = [r for r in [gpt, gem] if r]
+
+        if not results:
+            st.error("No responses")
+        else:
+            for r in results:
+                r.relevance_score = relevance(user_input, r.response_text, domain)
+
+            score(results)
+
+            best = max(results, key=lambda x: x.final_score)
+
+            # OUTPUT
+            for r in results:
+                st.markdown("---")
+                st.subheader(r.model_name)
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Latency", f"{r.latency:.2f}s")
+                c2.metric("Tokens", r.tokens_used)
+                c3.metric("Relevance", f"{r.relevance_score:.2f}")
+                c4.metric("Score", f"{r.final_score:.3f}")
+
+                if r == best:
+                    st.success("Best Model Selected")
+
+                st.write(r.response_text)
+
+            st.markdown("---")
+            st.success(f"🚀 Recommended Model: {best.model_name}")
 total_w = w_relevance + w_latency + w_cost
 w_relevance /= total_w
 w_latency /= total_w
