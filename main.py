@@ -17,23 +17,184 @@ st.set_page_config(
 
 # ---------------- HEADER ----------------
 st.markdown("# 🤖 NIIVA")
-st.markdown("### AI Model Evaluation & Comparison Platform")
+st.markdown("### Multi-Factor AI Model Evaluation Platform")
 
-# ---------------- DOMAIN SELECTION ----------------
-st.markdown("### 🌐 Select Domain")
+# ---------------- DOMAIN ----------------
 domain = st.selectbox(
-    "Choose domain:",
+    "🌐 Select Domain:",
     ["General", "Healthcare", "Finance", "Legal", "Coding"]
 )
 
+# ---------------- WEIGHTS (IMPORTANT) ----------------
+st.markdown("### ⚖️ Scoring Weights")
+
+col1, col2, col3 = st.columns(3)
+w_relevance = col1.slider("Relevance", 0.0, 1.0, 0.5)
+w_latency = col2.slider("Latency", 0.0, 1.0, 0.3)
+w_cost = col3.slider("Cost", 0.0, 1.0, 0.2)
+
+# Normalize weights
+total_w = w_relevance + w_latency + w_cost
+w_relevance /= total_w
+w_latency /= total_w
+w_cost /= total_w
+
 # ---------------- INPUT ----------------
-st.markdown("### 🧠 Enter Prompt")
-user_input = st.text_area("Type your query:", height=120)
+user_input = st.text_area("🧠 Enter Prompt")
 run_btn = st.button("🚀 Run Comparison")
 
 # ---------------- API CONFIG ----------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+
+# ---------------- DATA STRUCTURE ----------------
+@dataclass
+class ModelResponse:
+    model_name: str
+    response_text: str
+    latency: float
+    tokens_used: int
+    raw_response: Any
+    relevance_score: float = 0.0
+    latency_score: float = 0.0
+    cost_score: float = 0.0
+    final_score: float = 0.0
+
+# ---------------- LLM RELEVANCE ----------------
+def llm_relevance_score(prompt: str, response: str, domain: str) -> float:
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        eval_prompt = f"""
+Rate relevance (0 to 1)
+
+Domain: {domain}
+Prompt: {prompt}
+Response: {response}
+
+Return only number.
+"""
+
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": eval_prompt}],
+            "max_tokens": 10
+        }
+
+        res = requests.post(OPENAI_URL, headers=headers, json=payload)
+        score = res.json()["choices"][0]["message"]["content"].strip()
+
+        return float(score)
+
+    except:
+        return 0.0
+
+# ---------------- MODEL CALLS ----------------
+def call_chatgpt(prompt: str, domain: str):
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": f"You are an expert in {domain}."},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 200
+    }
+
+    start = time.time()
+    res = requests.post(OPENAI_URL, headers=headers, json=payload)
+    latency = time.time() - start
+
+    data = res.json()
+    text = data["choices"][0]["message"]["content"]
+    tokens = data.get("usage", {}).get("total_tokens", 0)
+
+    return ModelResponse("ChatGPT", text, latency, tokens, data)
+
+def call_gemini(prompt: str, domain: str):
+    payload = {
+        "contents": [{
+            "parts": [{"text": f"[Domain: {domain}] {prompt}"}]
+        }]
+    }
+
+    start = time.time()
+    res = requests.post(GEMINI_URL, json=payload)
+    latency = time.time() - start
+
+    data = res.json()
+
+    text = data["candidates"][0]["content"]["parts"][0]["text"]
+    tokens = data.get("usageMetadata", {}).get("totalTokenCount", 0)
+
+    return ModelResponse("Gemini", text, latency, tokens, data)
+
+# ---------------- MULTI-FACTOR SCORING ----------------
+def compute_scores(results: List[ModelResponse]):
+    latencies = [r.latency for r in results]
+    tokens = [r.tokens_used for r in results]
+
+    max_latency = max(latencies)
+    max_tokens = max(tokens)
+
+    for r in results:
+        # Normalize (lower is better → invert)
+        r.latency_score = 1 - (r.latency / max_latency)
+        r.cost_score = 1 - (r.tokens_used / max_tokens)
+
+        r.final_score = (
+            w_relevance * r.relevance_score +
+            w_latency * r.latency_score +
+            w_cost * r.cost_score
+        )
+
+# ---------------- MAIN ----------------
+if run_btn and user_input.strip():
+
+    with st.spinner("Running models..."):
+        gpt = call_chatgpt(user_input, domain)
+        gemini = call_gemini(user_input, domain)
+
+        results = [gpt, gemini]
+
+        for r in results:
+            r.relevance_score = llm_relevance_score(
+                user_input, r.response_text, domain
+            )
+
+        compute_scores(results)
+
+    # ---------------- DISPLAY ----------------
+    best = max(results, key=lambda x: x.final_score)
+
+    for r in results:
+        st.markdown("---")
+        st.markdown(f"## 🤖 {r.model_name}")
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.metric("⚡ Latency", f"{r.latency:.2f}s")
+        c2.metric("💰 Tokens", r.tokens_used)
+        c3.metric("🎯 Relevance", f"{r.relevance_score:.2f}")
+        c4.metric("🏆 Score", f"{r.final_score:.3f}")
+
+        if r.model_name == best.model_name:
+            st.success("🏆 Best Model")
+
+        st.write(r.response_text)
+
+    st.markdown("---")
+    st.success(f"🏆 Best Overall: {best.model_name}")
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
