@@ -11,29 +11,238 @@ load_dotenv()
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="NIIVA", layout="wide")
-
-# ---------------- SAFE CSS ----------------
-st.markdown("""
-<style>
-.main-title {
-    font-size: 40px;
-    font-weight: bold;
-    color: #4CAF50;
-}
-.card {
-    padding: 15px;
-    border-radius: 12px;
-    background-color: #111;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown('<div class="main-title">🤖 NIIVA - AI Decision Engine</div>', unsafe_allow_html=True)
+st.title("🤖 NIIVA - AI Decision Engine")
 
 # ---------------- WEIGHTS ----------------
 W_RELEVANCE = 0.5
 W_LATENCY = 0.3
 W_COST = 0.2
+
+# ---------------- INPUT ----------------
+user_input = st.text_area("Enter your prompt")
+run_btn = st.button("Run")
+
+# ---------------- API KEYS ----------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+
+# ---------------- DATA ----------------
+@dataclass
+class ModelResponse:
+    model_name: str
+    response_text: str
+    latency: float
+    tokens_used: int
+    raw_response: Any
+    relevance_score: float = 0.0
+    latency_score: float = 0.0
+    cost_score: float = 0.0
+    final_score: float = 0.0
+
+# ---------------- SAFE REQUEST ----------------
+def safe_request(url, headers=None, json=None, retries=2):
+    for _ in range(retries):
+        try:
+            res = requests.post(url, headers=headers, json=json, timeout=10)
+            if res.status_code == 200:
+                return res
+        except:
+            time.sleep(1)
+    return None
+
+# ---------------- DOMAIN ----------------
+def keyword_domain(prompt):
+    p = prompt.lower()
+    if "doctor" in p or "medicine" in p:
+        return "Healthcare"
+    if "stock" in p or "money" in p:
+        return "Finance"
+    if "law" in p or "legal" in p:
+        return "Legal"
+    if "code" in p or "python" in p:
+        return "Coding"
+    return "General"
+
+def detect_domain(prompt):
+    try:
+        res = safe_request(
+            OPENAI_URL,
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"Classify into one: Healthcare, Finance, Legal, Coding, General. Prompt: {prompt}"
+                }],
+                "max_tokens": 5
+            }
+        )
+        if res:
+            text = res.json()["choices"][0]["message"]["content"].strip().capitalize()
+            if text in ["Healthcare", "Finance", "Legal", "Coding", "General"]:
+                return text
+        return keyword_domain(prompt)
+    except:
+        return keyword_domain(prompt)
+
+# ---------------- INTENT ----------------
+def detect_intent(prompt):
+    p = prompt.lower()
+    if "build" in p or "create" in p:
+        return "Generate"
+    if "explain" in p or "what is" in p:
+        return "Explain"
+    if "compare" in p:
+        return "Compare"
+    if "error" in p or "fix" in p:
+        return "Debug"
+    return "General"
+
+# ---------------- CONTEXT ENRICHMENT ----------------
+def enrich_prompt(prompt, domain, intent):
+
+    base = f"You are an expert in {domain}."
+
+    if intent == "Generate":
+        inst = "Provide complete structured solution."
+    elif intent == "Explain":
+        inst = "Explain clearly with examples."
+    elif intent == "Compare":
+        inst = "Compare with pros and cons."
+    elif intent == "Debug":
+        inst = "Fix issue and explain."
+    else:
+        inst = "Provide helpful answer."
+
+    return f"{base}\nTask:{intent}\nInstruction:{inst}\nQuery:{prompt}"
+
+# ---------------- RELEVANCE ----------------
+def relevance(prompt, response, domain):
+    res = safe_request(
+        OPENAI_URL,
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{
+                "role": "user",
+                "content": f"Score 0-1 relevance\nPrompt:{prompt}\nResponse:{response}"
+            }],
+            "max_tokens": 10
+        }
+    )
+    try:
+        return float(res.json()["choices"][0]["message"]["content"])
+    except:
+        return 0.0
+
+# ---------------- MODELS ----------------
+def chatgpt(prompt, domain, intent):
+    start = time.time()
+    enriched = enrich_prompt(prompt, domain, intent)
+
+    res = safe_request(
+        OPENAI_URL,
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": enriched}]
+        }
+    )
+
+    latency = time.time() - start
+    if not res:
+        return None
+
+    data = res.json()
+
+    return ModelResponse(
+        "ChatGPT",
+        data.get("choices", [{}])[0].get("message", {}).get("content", ""),
+        latency,
+        data.get("usage", {}).get("total_tokens", 0),
+        data
+    )
+
+def gemini(prompt, domain, intent):
+    start = time.time()
+    enriched = enrich_prompt(prompt, domain, intent)
+
+    res = safe_request(
+        GEMINI_URL,
+        json={"contents": [{"parts": [{"text": enriched}]}]}
+    )
+
+    latency = time.time() - start
+    if not res:
+        return None
+
+    data = res.json()
+
+    return ModelResponse(
+        "Gemini",
+        data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", ""),
+        latency,
+        data.get("usageMetadata", {}).get("totalTokenCount", 0),
+        data
+    )
+
+# ---------------- SCORING ----------------
+def compute_scores(results):
+    max_lat = max(r.latency for r in results)
+    max_tok = max(r.tokens_used for r in results)
+
+    for r in results:
+        r.latency_score = 1 - r.latency / max_lat if max_lat else 0
+        r.cost_score = 1 - r.tokens_used / max_tok if max_tok else 0
+
+        r.final_score = (
+            W_RELEVANCE * r.relevance_score +
+            W_LATENCY * r.latency_score +
+            W_COST * r.cost_score
+        )
+
+# ---------------- MAIN ----------------
+if run_btn and user_input.strip():
+
+    with st.spinner("Processing..."):
+
+        domain = detect_domain(user_input)
+        intent = detect_intent(user_input)
+
+        st.success(f"🧠 Domain: {domain} | Intent: {intent}")
+
+        with ThreadPoolExecutor() as ex:
+            gpt = ex.submit(chatgpt, user_input, domain, intent).result()
+            gem = ex.submit(gemini, user_input, domain, intent).result()
+
+        results = [r for r in [gpt, gem] if r]
+
+        if not results:
+            st.error("No response")
+        else:
+            for r in results:
+                r.relevance_score = relevance(user_input, r.response_text, domain)
+
+            compute_scores(results)
+            best = max(results, key=lambda x: x.final_score)
+
+            # -------- OUTPUT --------
+            st.markdown("## 🚀 Best Model Output")
+
+            st.subheader(best.model_name)
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Latency", f"{best.latency:.2f}s")
+            c2.metric("Tokens", best.tokens_used)
+            c3.metric("Relevance", f"{best.relevance_score:.2f}")
+            c4.metric("Score", f"{best.final_score:.3f}")
+
+            st.success("🏆 Best Model Selected")
+
+            st.write(best.response_text)
 
 # ---------------- INPUT ----------------
 user_input = st.text_area("Enter your prompt")
