@@ -53,30 +53,89 @@ def safe_request(url, headers=None, json=None, retries=2):
             time.sleep(1)
     return None
 
-# ---------------- DOMAIN DETECTION ----------------
+# ---------------- DOMAIN DETECTION (AI-BASED) ----------------
 def detect_domain(prompt):
-    p = prompt.lower()
-    if any(k in p for k in ["doctor", "medicine", "patient", "disease"]):
-        return "Healthcare"
-    if any(k in p for k in ["stock", "investment", "bank", "money"]):
-        return "Finance"
-    if any(k in p for k in ["law", "legal", "contract"]):
-        return "Legal"
-    if any(k in p for k in ["code", "python", "bug", "api"]):
-        return "Coding"
+    try:
+        res = safe_request(
+            OPENAI_URL,
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"""
+Classify the query into ONE domain:
+
+Healthcare
+Finance
+Legal
+Coding
+Education
+Business
+General
+
+Return ONLY one word.
+
+Query: {prompt}
+"""
+                }],
+                "max_tokens": 5
+            }
+        )
+
+        if res:
+            domain = res.json()["choices"][0]["message"]["content"].strip().capitalize()
+
+            allowed = ["Healthcare", "Finance", "Legal", "Coding", "Education", "Business", "General"]
+
+            if domain in allowed:
+                return domain
+
+    except:
+        pass
+
     return "General"
 
-# ---------------- INTENT DETECTION ----------------
+# ---------------- INTENT DETECTION (AI-BASED) ----------------
 def detect_intent(prompt):
-    p = prompt.lower()
-    if any(k in p for k in ["build", "create", "write code", "api"]):
-        return "Generate"
-    if any(k in p for k in ["explain", "what is"]):
-        return "Explain"
-    if any(k in p for k in ["compare", "difference"]):
-        return "Compare"
-    if any(k in p for k in ["error", "fix", "debug"]):
-        return "Debug"
+    try:
+        res = safe_request(
+            OPENAI_URL,
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"""
+Classify the intent into ONE:
+
+Generate
+Explain
+Compare
+Debug
+Analyze
+Summarize
+
+Return ONLY one word.
+
+Query: {prompt}
+"""
+                }],
+                "max_tokens": 5
+            }
+        )
+
+        if res:
+            intent = res.json()["choices"][0]["message"]["content"].strip().capitalize()
+
+            allowed = ["Generate", "Explain", "Compare", "Debug", "Analyze", "Summarize"]
+
+            if intent in allowed:
+                return intent
+
+    except:
+        pass
+
     return "General"
 
 # ---------------- CONTEXT ENRICHMENT ----------------
@@ -92,12 +151,16 @@ def enrich_prompt(prompt, domain, intent):
         inst = "Compare with pros and cons."
     elif intent == "Debug":
         inst = "Fix the issue and explain."
+    elif intent == "Analyze":
+        inst = "Analyze deeply with insights."
+    elif intent == "Summarize":
+        inst = "Summarize clearly."
     else:
         inst = "Provide a helpful answer."
 
     return f"{base}\nTask:{intent}\nInstruction:{inst}\nQuery:{prompt}"
 
-# ---------------- RELEVANCE SCORING ----------------
+# ---------------- RELEVANCE ----------------
 def relevance(prompt, response):
     try:
         score = len(set(prompt.lower().split()) & set(response.lower().split()))
