@@ -311,6 +311,264 @@ def safe_request(url, headers=None, json=None, retries=2):
             time.sleep(1)
     return None
 
+# ---------------- DOMAIN DETECTION ----------------
+def detect_domain(prompt):
+    try:
+        res = safe_request(
+            OPENAI_URL,
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"""
+Classify this query into one domain:
+
+Healthcare, Finance, Legal, Coding, Education, Business, General
+
+Return only the domain.
+
+Query: {prompt}
+"""
+                }],
+                "max_tokens": 10
+            }
+        )
+
+        if res:
+            raw = res.json()["choices"][0]["message"]["content"].lower()
+
+            if "health" in raw:
+                return "Healthcare"
+            elif "finance" in raw:
+                return "Finance"
+            elif "legal" in raw:
+                return "Legal"
+            elif "coding" in raw or "program" in raw:
+                return "Coding"
+            elif "education" in raw:
+                return "Education"
+            elif "business" in raw:
+                return "Business"
+
+    except:
+        pass
+
+    # fallback
+    p = prompt.lower()
+    if "doctor" in p or "medicine" in p:
+        return "Healthcare"
+    if "money" in p or "stock" in p:
+        return "Finance"
+    if "law" in p:
+        return "Legal"
+    if "code" in p:
+        return "Coding"
+
+    return "General"
+
+# ---------------- INTENT DETECTION ----------------
+def detect_intent(prompt):
+    try:
+        res = safe_request(
+            OPENAI_URL,
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": f"""
+Classify intent into one:
+
+Generate, Explain, Compare, Debug, Analyze, Summarize
+
+Return only the intent.
+
+Query: {prompt}
+"""
+                }],
+                "max_tokens": 10
+            }
+        )
+
+        if res:
+            raw = res.json()["choices"][0]["message"]["content"].lower()
+
+            if "generate" in raw or "create" in raw:
+                return "Generate"
+            elif "explain" in raw:
+                return "Explain"
+            elif "compare" in raw:
+                return "Compare"
+            elif "debug" in raw or "fix" in raw:
+                return "Debug"
+            elif "analy" in raw:
+                return "Analyze"
+            elif "summar" in raw:
+                return "Summarize"
+
+    except:
+        pass
+
+    return "General"
+
+# ---------------- CONTEXT ENRICHMENT ----------------
+def enrich_prompt(prompt, domain, intent):
+
+    base = f"You are an expert in {domain}."
+
+    if intent == "Generate":
+        inst = "Provide a complete structured solution."
+    elif intent == "Explain":
+        inst = "Explain clearly with examples."
+    elif intent == "Compare":
+        inst = "Compare with pros and cons."
+    elif intent == "Debug":
+        inst = "Fix the issue and explain."
+    elif intent == "Analyze":
+        inst = "Provide deep analysis."
+    elif intent == "Summarize":
+        inst = "Summarize clearly."
+    else:
+        inst = "Provide helpful answer."
+
+    return f"{base}\nTask:{intent}\nInstruction:{inst}\nQuery:{prompt}"
+
+# ---------------- RELEVANCE ----------------
+def relevance(prompt, response):
+    try:
+        score = len(set(prompt.lower().split()) & set(response.lower().split()))
+        return min(score / 10, 1.0)
+    except:
+        return 0.0
+
+# ---------------- MODEL CALLS ----------------
+def call_chatgpt(prompt, domain, intent):
+    start = time.time()
+    enriched = enrich_prompt(prompt, domain, intent)
+
+    res = safe_request(
+        OPENAI_URL,
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": enriched}]
+        }
+    )
+
+    latency = time.time() - start
+    if not res:
+        return None
+
+    data = res.json()
+
+    return ModelResponse(
+        "ChatGPT",
+        data.get("choices", [{}])[0].get("message", {}).get("content", ""),
+        latency,
+        data.get("usage", {}).get("total_tokens", 0),
+        data
+    )
+
+def call_gemini(prompt, domain, intent):
+    start = time.time()
+    enriched = enrich_prompt(prompt, domain, intent)
+
+    res = safe_request(
+        GEMINI_URL,
+        json={"contents": [{"parts": [{"text": enriched}]}]}
+    )
+
+    latency = time.time() - start
+    if not res:
+        return None
+
+    data = res.json()
+
+    return ModelResponse(
+        "Gemini",
+        data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", ""),
+        latency,
+        data.get("usageMetadata", {}).get("totalTokenCount", 0),
+        data
+    )
+
+# ---------------- SCORING ----------------
+def compute_scores(results: List[ModelResponse]):
+    max_latency = max(r.latency for r in results)
+    max_tokens = max(r.tokens_used for r in results)
+
+    for r in results:
+        r.latency_score = 1 - (r.latency / max_latency) if max_latency else 0
+        r.cost_score = 1 - (r.tokens_used / max_tokens) if max_tokens else 0
+
+        r.final_score = (
+            W_RELEVANCE * r.relevance_score +
+            W_LATENCY * r.latency_score +
+            W_COST * r.cost_score
+        )
+
+# ---------------- MAIN ----------------
+if run_btn and user_input.strip():
+
+    with st.spinner("Processing..."):
+
+        domain = detect_domain(user_input)
+        intent = detect_intent(user_input)
+
+        st.success(f"🧠 Domain: {domain} | Intent: {intent}")
+
+        with ThreadPoolExecutor() as executor:
+            gpt = executor.submit(call_chatgpt, user_input, domain, intent).result()
+            gem = executor.submit(call_gemini, user_input, domain, intent).result()
+
+        results = [r for r in [gpt, gem] if r]
+
+        if not results:
+            st.error("No response received")
+        else:
+            for r in results:
+                r.relevance_score = relevance(user_input, r.response_text)
+
+            compute_scores(results)
+            best = max(results, key=lambda x: x.final_score)
+
+            # -------- OUTPUT --------
+            st.markdown("## 🚀 Best Model Output")
+
+            st.subheader(best.model_name)
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Latency", f"{best.latency:.2f}s")
+            c2.metric("Tokens", best.tokens_used)
+            c3.metric("Relevance", f"{best.relevance_score:.2f}")
+            c4.metric("Score", f"{best.final_score:.3f}")
+
+            st.success("🏆 Best Model Selected")
+
+            st.write(best.response_text)
+    latency: float
+    tokens_used: int
+    raw_response: Any
+    relevance_score: float = 0.0
+    latency_score: float = 0.0
+    cost_score: float = 0.0
+    final_score: float = 0.0
+
+# ---------------- SAFE REQUEST ----------------
+def safe_request(url, headers=None, json=None, retries=2):
+    for _ in range(retries):
+        try:
+            res = requests.post(url, headers=headers, json=json, timeout=10)
+            if res.status_code == 200:
+                return res
+        except:
+            time.sleep(1)
+    return None
+
 # ---------------- DOMAIN DETECTION (AI-BASED) ----------------
 def detect_domain(prompt):
     try:
