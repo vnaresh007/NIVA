@@ -12,7 +12,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not OPENAI_API_KEY or not GEMINI_API_KEY:
-    raise ValueError("API keys not found. Check your .env file.")
+    st.error("API keys not found. Check your .env file.")
+    st.stop()
 
 # -------------------------------
 # API ENDPOINTS
@@ -21,12 +22,14 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
 # -------------------------------
-# LLM CONFIG
+# MODEL CONFIG
 # -------------------------------
 LLM_MODELS = {
     "gpt-4": {"latency": 0.7, "cost": 0.9, "domain_relevance": 0.95},
     "gemini-pro": {"latency": 0.5, "cost": 0.6, "domain_relevance": 0.88},
-
+    "claude-3": {"latency": 0.6, "cost": 0.85, "domain_relevance": 0.92},
+    "mistral-large": {"latency": 0.4, "cost": 0.5, "domain_relevance": 0.80},
+    "llama-3": {"latency": 0.3, "cost": 0.4, "domain_relevance": 0.75}
 }
 
 WEIGHTS = {"latency": 0.3, "cost": 0.3, "domain_relevance": 0.4}
@@ -36,11 +39,11 @@ WEIGHTS = {"latency": 0.3, "cost": 0.3, "domain_relevance": 0.4}
 # -------------------------------
 def score_models():
     scores = {}
-    for model, values in LLM_MODELS.items():
+    for model, v in LLM_MODELS.items():
         score = (
-            WEIGHTS["latency"] * (1 - values["latency"]) +
-            WEIGHTS["cost"] * (1 - values["cost"]) +
-            WEIGHTS["domain_relevance"] * values["domain_relevance"]
+            WEIGHTS["latency"] * (1 - v["latency"]) +
+            WEIGHTS["cost"] * (1 - v["cost"]) +
+            WEIGHTS["domain_relevance"] * v["domain_relevance"]
         )
         scores[model] = round(score, 4)
     return scores
@@ -49,21 +52,27 @@ def select_best_model(scores):
     return max(scores, key=scores.get)
 
 # -------------------------------
-# REAL API CALLS
+# API CALLS
 # -------------------------------
 def call_openai(prompt):
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
 
-    payload = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": prompt}]
-    }
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": prompt}]
+        }
 
-    response = requests.post(OPENAI_URL, headers=headers, json=payload)
-    return response.json()["choices"][0]["message"]["content"]
+        response = requests.post(OPENAI_URL, headers=headers, json=payload)
+        data = response.json()
+
+        return data["choices"][0]["message"]["content"]
+
+    except Exception as e:
+        return f"OpenAI Error: {str(e)}"
 
 
 def call_gemini(prompt):
@@ -77,36 +86,54 @@ def call_gemini(prompt):
         ]
     }
 
-    response = requests.post(GEMINI_URL, headers=headers, json=payload)
-    return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+    try:
+        response = requests.post(GEMINI_URL, headers=headers, json=payload)
+
+        # Debug (optional)
+        print("Status:", response.status_code)
+        print("Response:", response.text)
+
+        data = response.json()
+
+        # ✅ Success
+        if "candidates" in data:
+            candidate = data["candidates"][0]
+            content = candidate.get("content", {})
+            parts = content.get("parts", [])
+
+            if parts and "text" in parts[0]:
+                return parts[0]["text"]
+            else:
+                return "Gemini returned empty response."
+
+        # ❌ API error
+        elif "error" in data:
+            return f"Gemini API Error: {data['error'].get('message')}"
+
+        # ❌ Unexpected
+        else:
+            return f"Unexpected Gemini response: {data}"
+
+    except Exception as e:
+        return f"Gemini request failed: {str(e)}"
 
 
 # -------------------------------
-# EXECUTION (SINGLE MODEL ONLY)
+# EXECUTION (Single Model Only)
 # -------------------------------
-def execute_llm(model_name, prompt):
-
-    if model_name == "gpt-4":
+def execute_llm(model, prompt):
+    if model == "gpt-4":
         return call_openai(prompt)
 
-    elif model_name == "gemini-pro":
+    elif model == "gemini-pro":
         return call_gemini(prompt)
 
-    elif model_name == "claude-3":
-        return "[Claude API not connected yet]"
-
-    elif model_name == "mistral-large":
-        return "[Mistral API not connected yet]"
-
-    elif model_name == "llama-3":
-        return "[LLaMA API not connected yet]"
-
     else:
-        return "No valid model selected."
+        return f"[{model}] not connected yet"
 
 
 # -------------------------------
-# CHATBOT PIPELINE
+# CHAT PIPELINE
 # -------------------------------
 def chatbot(prompt, metadata):
 
@@ -136,11 +163,22 @@ st.title("🌍 Intelligent LLM Routing Chatbot")
 # Sidebar
 st.sidebar.header("⚙️ Configuration")
 
-domain = st.sidebar.selectbox("Domain", ["general", "finance", "coding"])
-user_tier = st.sidebar.selectbox("User Tier", ["free", "pro"])
-region = st.sidebar.selectbox("Region", ["global", "asia"])
+domain = st.sidebar.selectbox(
+    "Domain",
+    ["coding", "finance"]   # ❌ removed "general"
+)
 
-# Chat input
+user_tier = st.sidebar.selectbox(
+    "User Tier",
+    ["free", "pro"]
+)
+
+region = st.sidebar.selectbox(
+    "Region",
+    ["global", "asia"]
+)
+
+# Chat
 st.subheader("💬 Chat")
 
 user_input = st.text_input("Enter your prompt:")
@@ -159,7 +197,7 @@ if st.button("Send"):
     st.subheader("🤖 Response")
     st.write(response)
 
-    # Selected model
+    # Selected Model
     st.subheader("🏆 Selected Model")
     st.success(selected_model)
 
