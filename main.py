@@ -1,231 +1,193 @@
-import streamlit as st
-import time
-import requests
-from dataclasses import dataclass
-from typing import List, Any
+           import time
 import os
-from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor
 
-load_dotenv()
+# OpenAI
+from openai import OpenAI
 
-# ---------------- CONFIG ----------------
-st.set_page_config(page_title="NIIVA", layout="wide")
+# Anthropic
+import anthropic
 
-st.title("NIIVA - AI Decision Engine")
+# Gemini
+import google.generativeai as genai
 
-# ---------------- WEIGHTS ----------------
-W_RELEVANCE = 0.5
-W_LATENCY = 0.3
-W_COST = 0.2
 
-# ---------------- INPUT ----------------
-user_input = st.text_area("Enter your prompt")
-run_btn = st.button("Run")
+# -------------------------------
+# 1. Initialize Clients
+# -------------------------------
 
-# ---------------- API KEYS ----------------
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
-# ---------------- DATA ----------------
-@dataclass
-class ModelResponse:
-    model_name: str
-    response_text: str
-    latency: float
-    tokens_used: int
-    raw_response: Any
-    relevance_score: float = 0.0
-    latency_score: float = 0.0
-    cost_score: float = 0.0
-    final_score: float = 0.0
+# -------------------------------
+# 2. Static LLM Configuration
+# -------------------------------
 
-# ---------------- SAFE REQUEST ----------------
-def safe_request(url, headers=None, json=None, retries=2):
-    for _ in range(retries):
-        try:
-            res = requests.post(url, headers=headers, json=json, timeout=15)
-            if res.status_code == 200:
-                return res
-            else:
-                st.error(f"API Error {res.status_code}: {res.text}")
-        except Exception as e:
-            st.error(f"Request failed: {e}")
-            time.sleep(1)
-    return None
+LLM_MODELS = {
+    "gpt-4": {
+        "latency": 0.7,
+        "cost": 0.9,
+        "domain_relevance": 0.95
+    },
+    "claude-3": {
+        "latency": 0.6,
+        "cost": 0.85,
+        "domain_relevance": 0.92
+    },
+    "gemini-pro": {
+        "latency": 0.5,
+        "cost": 0.6,
+        "domain_relevance": 0.88
+    },
+    "mistral-large": {
+        "latency": 0.4,
+        "cost": 0.5,
+        "domain_relevance": 0.80
+    },
+    "llama-3": {
+        "latency": 0.3,
+        "cost": 0.4,
+        "domain_relevance": 0.75
+    }
+}
 
-# ---------------- DOMAIN ----------------
-def detect_domain(prompt):
-    p = prompt.lower()
 
-    if any(k in p for k in ["doctor", "hospital", "disease", "medicine", "symptom", "treatment"]):
-        return "Healthcare"
-    if any(k in p for k in ["stock", "investment", "finance", "money", "crypto"]):
-        return "Finance"
-    if any(k in p for k in ["law", "legal", "contract"]):
-        return "Legal"
-    if any(k in p for k in ["code", "python", "api", "bug", "program"]):
-        return "Coding"
-    if any(k in p for k in ["business", "startup", "market", "growth"]):
-        return "Business"
+# -------------------------------
+# 3. Weights
+# -------------------------------
 
-    return "General"
+WEIGHTS = {
+    "latency": 0.3,
+    "cost": 0.3,
+    "domain_relevance": 0.4
+}
 
-# ---------------- INTENT ----------------
-def detect_intent(prompt, domain):
-    p = prompt.lower()
 
-    if domain == "Healthcare":
-        if "symptom" in p:
-            return "Symptoms Analysis"
-        if "treatment" in p:
-            return "Treatment Guidance"
-        return "Medical Advice"
+# -------------------------------
+# 4. Prompt Ingestion
+# -------------------------------
 
-    if domain == "Finance":
-        if "invest" in p:
-            return "Investment Advice"
-        if "risk" in p:
-            return "Risk Analysis"
-        return "Financial Guidance"
+def ingest_prompt(user_input, metadata):
+    return {
+        "prompt": user_input,
+        "metadata": metadata
+    }
 
-    if domain == "Coding":
-        if "error" in p or "bug" in p:
-            return "Debugging"
-        return "Code Assistance"
 
-    if domain == "Business":
-        return "Business Strategy"
+# -------------------------------
+# 5. Context Enrichment
+# -------------------------------
 
-    return "General"
-
-# ---------------- CONTEXT ----------------
-def enrich_prompt(prompt, domain, intent):
+def enrich_context(data):
     return f"""
-You are an expert in {domain}.
-Task: {intent}
-Provide a clear structured answer.
+    [User Tier: {data['metadata'].get('user_tier')}]
+    [Region: {data['metadata'].get('region')}]
+    [Domain: {data['metadata'].get('domain')}]
 
-User Query:
-{prompt}
-"""
+    {data['prompt']}
+    """.strip()
 
-# ---------------- RELEVANCE ----------------
-def relevance(prompt, response):
-    try:
-        score = len(set(prompt.lower().split()) & set(response.lower().split()))
-        return min(score / 10, 1.0)
-    except:
-        return 0.0
 
-# ---------------- MODEL CALLS ----------------
-def call_chatgpt(prompt, domain, intent):
-    start = time.time()
-    enriched = enrich_prompt(prompt, domain, intent)
+# -------------------------------
+# 6. Scoring Engine
+# -------------------------------
 
-    res = safe_request(
-        OPENAI_URL,
-        headers={
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": enriched}],
-            "max_tokens": 300
-        }
-    )
+def score_models():
+    scores = {}
 
-    latency = time.time() - start
-    if not res:
-        return None
-
-    data = res.json()
-
-    return ModelResponse(
-        "ChatGPT",
-        data.get("choices", [{}])[0].get("message", {}).get("content", ""),
-        latency,
-        data.get("usage", {}).get("total_tokens", 0),
-        data
-    )
-
-def call_gemini(prompt, domain, intent):
-    start = time.time()
-    enriched = enrich_prompt(prompt, domain, intent)
-
-    res = safe_request(
-        GEMINI_URL,
-        headers={"Content-Type": "application/json"},
-        json={"contents": [{"parts": [{"text": enriched}]}]}
-    )
-
-    latency = time.time() - start
-    if not res:
-        return None
-
-    data = res.json()
-
-    return ModelResponse(
-        "Gemini",
-        data.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", ""),
-        latency,
-        data.get("usageMetadata", {}).get("totalTokenCount", 0),
-        data
-    )
-
-# ---------------- SCORING ----------------
-def compute_scores(results: List[ModelResponse]):
-    max_latency = max(r.latency for r in results)
-    max_tokens = max(r.tokens_used for r in results)
-
-    for r in results:
-        r.latency_score = 1 - (r.latency / max_latency) if max_latency else 0
-        r.cost_score = 1 - (r.tokens_used / max_tokens) if max_tokens else 0
-
-        r.final_score = (
-            W_RELEVANCE * r.relevance_score +
-            W_LATENCY * r.latency_score +
-            W_COST * r.cost_score
+    for model, values in LLM_MODELS.items():
+        score = (
+            WEIGHTS["latency"] * (1 - values["latency"]) +
+            WEIGHTS["cost"] * (1 - values["cost"]) +
+            WEIGHTS["domain_relevance"] * values["domain_relevance"]
         )
+        scores[model] = round(score, 4)
 
-# ---------------- MAIN ----------------
-if run_btn:
+    return scores
 
-    if not user_input.strip():
-        st.warning("Please enter a prompt")
+
+# -------------------------------
+# 7. Model Selection
+# -------------------------------
+
+def select_best_model(scores):
+    return max(scores, key=scores.get)
+
+
+# -------------------------------
+# 8. Real LLM Execution (Single Call)
+# -------------------------------
+
+def execute_llm(model_name, prompt):
+
+    if model_name == "gpt-4":
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",  # cost-effective GPT
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
+
+    elif model_name == "claude-3":
+        response = anthropic_client.messages.create(
+            model="claude-3-sonnet-20240229",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
+
+    elif model_name == "gemini-pro":
+        model = genai.GenerativeModel("gemini-pro")
+        response = model.generate_content(prompt)
+        return response.text
+
+    elif model_name == "mistral-large":
+        # Placeholder (you can integrate Mistral API later)
+        return "[Mistral Placeholder Response]"
+
+    elif model_name == "llama-3":
+        # Placeholder (use Together.ai / Groq later)
+        return "[LLaMA Placeholder Response]"
+
     else:
-        with st.spinner("Processing..."):
+        return "No valid model selected."
 
-            domain = detect_domain(user_input)
-            intent = detect_intent(user_input, domain)
 
-            st.success(f"Domain: {domain} | Intent: {intent}")
+# -------------------------------
+# 9. Chatbot Pipeline
+# -------------------------------
 
-            with ThreadPoolExecutor() as executor:
-                gpt = executor.submit(call_chatgpt, user_input, domain, intent).result()
-                gem = executor.submit(call_gemini, user_input, domain, intent).result()
+def chatbot(user_input):
 
-            results = [r for r in [gpt, gem] if r]
+    metadata = {
+        "user_tier": "free",
+        "region": "global",
+        "domain": "general"
+    }
 
-            if not results:
-                st.error("No response from models")
-            else:
-                for r in results:
-                    r.relevance_score = relevance(user_input, r.response_text)
+    data = ingest_prompt(user_input, metadata)
+    enriched_prompt = enrich_context(data)
 
-                compute_scores(results)
-                best = max(results, key=lambda x: x.final_score)
+    scores = score_models()
+    best_model = select_best_model(scores)
 
-                st.subheader("Best Model: " + best.model_name)
-                st.write(best.response_text)
-    
-                                    
-        
-    
+    print(f"\nSelected Model: {best_model}")  # optional debug
+
+    response = execute_llm(best_model, enriched_prompt)
+
+    return response
+
+
+# -------------------------------
+# 10. Run Chatbot
+# -------------------------------
+
+if __name__ == "__main__":
+    while True:
+        user_input = input("User: ")
+        if user_input.lower() == "exit":
+            break
+
+        reply = chatbot(user_input)
+        print("Bot:", reply)
+             
