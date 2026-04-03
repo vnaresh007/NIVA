@@ -1,101 +1,43 @@
-import time
+import streamlit as st
 import os
-
-# OpenAI
-from openai import OpenAI
-
-# Anthropic
-import anthropic
-
-# Gemini
-import google.generativeai as genai
-
+import requests
+from dotenv import load_dotenv
 
 # -------------------------------
-# 1. Initialize Clients
+# Load ENV
 # -------------------------------
+load_dotenv()
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+if not OPENAI_API_KEY or not GEMINI_API_KEY:
+    raise ValueError("API keys not found. Check your .env file.")
 
 # -------------------------------
-# 2. Static LLM Configuration
+# API ENDPOINTS
 # -------------------------------
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
+# -------------------------------
+# LLM CONFIG
+# -------------------------------
 LLM_MODELS = {
-    "gpt-4": {
-        "latency": 0.7,
-        "cost": 0.9,
-        "domain_relevance": 0.95
-    },
-    "claude-3": {
-        "latency": 0.6,
-        "cost": 0.85,
-        "domain_relevance": 0.92
-    },
-    "gemini-pro": {
-        "latency": 0.5,
-        "cost": 0.6,
-        "domain_relevance": 0.88
-    },
-    "mistral-large": {
-        "latency": 0.4,
-        "cost": 0.5,
-        "domain_relevance": 0.80
-    },
-    "llama-3": {
-        "latency": 0.3,
-        "cost": 0.4,
-        "domain_relevance": 0.75
-    }
+    "gpt-4": {"latency": 0.7, "cost": 0.9, "domain_relevance": 0.95},
+    "claude-3": {"latency": 0.6, "cost": 0.85, "domain_relevance": 0.92},
+    "gemini-pro": {"latency": 0.5, "cost": 0.6, "domain_relevance": 0.88},
+    "mistral-large": {"latency": 0.4, "cost": 0.5, "domain_relevance": 0.80},
+    "llama-3": {"latency": 0.3, "cost": 0.4, "domain_relevance": 0.75}
 }
 
+WEIGHTS = {"latency": 0.3, "cost": 0.3, "domain_relevance": 0.4}
 
 # -------------------------------
-# 3. Weights
+# SCORING
 # -------------------------------
-
-WEIGHTS = {
-    "latency": 0.3,
-    "cost": 0.3,
-    "domain_relevance": 0.4
-}
-
-
-# -------------------------------
-# 4. Prompt Ingestion
-# -------------------------------
-
-def ingest_prompt(user_input, metadata):
-    return {
-        "prompt": user_input,
-        "metadata": metadata
-    }
-
-
-# -------------------------------
-# 5. Context Enrichment
-# -------------------------------
-
-def enrich_context(data):
-    return f"""
-    [User Tier: {data['metadata'].get('user_tier')}]
-    [Region: {data['metadata'].get('region')}]
-    [Domain: {data['metadata'].get('domain')}]
-
-    {data['prompt']}
-    """.strip()
-
-
-# -------------------------------
-# 6. Scoring Engine
-# -------------------------------
-
 def score_models():
     scores = {}
-
     for model, values in LLM_MODELS.items():
         score = (
             WEIGHTS["latency"] * (1 - values["latency"]) +
@@ -103,91 +45,141 @@ def score_models():
             WEIGHTS["domain_relevance"] * values["domain_relevance"]
         )
         scores[model] = round(score, 4)
-
     return scores
-
-
-# -------------------------------
-# 7. Model Selection
-# -------------------------------
 
 def select_best_model(scores):
     return max(scores, key=scores.get)
 
+# -------------------------------
+# REAL API CALLS
+# -------------------------------
+def call_openai(prompt):
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": prompt}]
+    }
+
+    response = requests.post(OPENAI_URL, headers=headers, json=payload)
+    return response.json()["choices"][0]["message"]["content"]
+
+
+def call_gemini(prompt):
+    headers = {"Content-Type": "application/json"}
+
+    payload = {
+        "contents": [
+            {
+                "parts": [{"text": prompt}]
+            }
+        ]
+    }
+
+    response = requests.post(GEMINI_URL, headers=headers, json=payload)
+    return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+
 
 # -------------------------------
-# 8. Real LLM Execution (Single Call)
+# EXECUTION (SINGLE MODEL ONLY)
 # -------------------------------
-
 def execute_llm(model_name, prompt):
 
     if model_name == "gpt-4":
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",  # cost-effective GPT
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content
-
-    elif model_name == "claude-3":
-        response = anthropic_client.messages.create(
-            model="claude-3-sonnet-20240229",
-            max_tokens=500,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.content[0].text
+        return call_openai(prompt)
 
     elif model_name == "gemini-pro":
-        model = genai.GenerativeModel("gemini-pro")
-        response = model.generate_content(prompt)
-        return response.text
+        return call_gemini(prompt)
+
+    elif model_name == "claude-3":
+        return "[Claude API not connected yet]"
 
     elif model_name == "mistral-large":
-        # Placeholder (you can integrate Mistral API later)
-        return "[Mistral Placeholder Response]"
+        return "[Mistral API not connected yet]"
 
     elif model_name == "llama-3":
-        # Placeholder (use Together.ai / Groq later)
-        return "[LLaMA Placeholder Response]"
+        return "[LLaMA API not connected yet]"
 
     else:
         return "No valid model selected."
 
 
 # -------------------------------
-# 9. Chatbot Pipeline
+# CHATBOT PIPELINE
 # -------------------------------
+def chatbot(prompt, metadata):
 
-def chatbot(user_input):
+    enriched_prompt = f"""
+    [User Tier: {metadata['user_tier']}]
+    [Region: {metadata['region']}]
+    [Domain: {metadata['domain']}]
 
-    metadata = {
-        "user_tier": "free",
-        "region": "global",
-        "domain": "general"
-    }
-
-    data = ingest_prompt(user_input, metadata)
-    enriched_prompt = enrich_context(data)
+    {prompt}
+    """
 
     scores = score_models()
     best_model = select_best_model(scores)
 
-    print(f"\nSelected Model: {best_model}")  # optional debug
-
     response = execute_llm(best_model, enriched_prompt)
 
-    return response
+    return response, best_model, scores
 
 
 # -------------------------------
-# 10. Run Chatbot
+# STREAMLIT UI
 # -------------------------------
+st.set_page_config(page_title="LLM Router", layout="wide")
 
-if __name__ == "__main__":
-    while True:
-        user_input = input("User: ")
-        if user_input.lower() == "exit":
-            break
+st.title("🌍 Intelligent LLM Routing Chatbot")
 
-        reply = chatbot(user_input)
-        print("Bot:", reply)
-             
+# Sidebar
+st.sidebar.header("⚙️ Configuration")
+
+domain = st.sidebar.selectbox("Domain", ["general", "finance", "coding"])
+user_tier = st.sidebar.selectbox("User Tier", ["free", "pro"])
+region = st.sidebar.selectbox("Region", ["global", "asia"])
+
+# Chat input
+st.subheader("💬 Chat")
+
+user_input = st.text_input("Enter your prompt:")
+
+if st.button("Send"):
+
+    metadata = {
+        "domain": domain,
+        "user_tier": user_tier,
+        "region": region
+    }
+
+    response, selected_model, scores = chatbot(user_input, metadata)
+
+    # Response
+    st.subheader("🤖 Response")
+    st.write(response)
+
+    # Selected model
+    st.subheader("🏆 Selected Model")
+    st.success(selected_model)
+
+    # Scores
+    st.subheader("📊 Model Scores")
+
+    score_data = []
+    for model, score in scores.items():
+        score_data.append({
+            "Model": model,
+            "Score": score,
+            "Latency": LLM_MODELS[model]["latency"],
+            "Cost": LLM_MODELS[model]["cost"],
+            "Domain Relevance": LLM_MODELS[model]["domain_relevance"]
+        })
+
+    st.dataframe(score_data, use_container_width=True)
+
+    # Chart
+    st.subheader("📈 Score Visualization")
+    st.bar_chart({model: score for model, score in scores.items()})
