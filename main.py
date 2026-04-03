@@ -1,58 +1,85 @@
+# NIIVA - Multi Model AI Comparator
+# ---------------------------------
+# Enhanced UI Version with proper descriptions and usability
+
 import streamlit as st
-import os
+import time
 import requests
+from dataclasses import dataclass
+from typing import List, Any
+import os
 from dotenv import load_dotenv
 
-# -------------------------------
-# Load ENV
-# -------------------------------
+
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-if not OPENAI_API_KEY or not GEMINI_API_KEY:
-    st.error("API keys not found. Check your .env file.")
-    st.stop()
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="NIIVA - AI Comparator",
+    page_icon="🤖",
+    layout="wide"
+)
 
-# -------------------------------
-# API ENDPOINTS
-# -------------------------------
+# ---------------- CUSTOM STYLING ----------------
+st.markdown("""
+    <style>
+    .main-title {
+        font-size: 42px;
+        font-weight: bold;
+        color: #4CAF50;
+    }
+    .subtitle {
+        font-size: 18px;
+        color: #888;
+    }
+    .card {
+        padding: 15px;
+        border-radius: 12px;
+        background-color: #111;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# ---------------- HEADER ----------------
+st.markdown('<div class="main-title">🤖 NIIVA</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">Next-Gen AI Model Comparison Platform</div>', unsafe_allow_html=True)
+
+st.markdown("""
+### 🚀 About NIIVA
+NAIVA helps you compare multiple AI models like ChatGPT and Gemini in real-time.
+
+🔍 **What you can do:**
+- Compare responses from different AI models
+- Analyze latency (speed)
+- Track token usage (cost efficiency)
+- View raw backend responses for debugging
+
+💡 Ideal for developers, researchers, and AI enthusiasts.
+""")
+
+st.markdown("---")
+
+# ---------------- API CONFIG ----------------
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"]
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets["GEMINI_API_KEY"]
+
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
-# -------------------------------
-# MODEL CONFIG
-# -------------------------------
-LLM_MODELS = {
-    "gpt-4": {"latency": 0.7, "cost": 0.9, "domain_relevance": 0.95},
-    "gemini-pro": {"latency": 0.5, "cost": 0.6, "domain_relevance": 0.88}
-    
-}
+# ---------------- DATA STRUCTURE ----------------
+@dataclass
+class ModelResponse:
+    model_name: str
+    response_text: str
+    latency: float
+    tokens_used: int
+    raw_response: Any
 
-WEIGHTS = {"latency": 0.3, "cost": 0.3, "domain_relevance": 0.4}
-
-# -------------------------------
-# SCORING
-# -------------------------------
-def score_models():
-    scores = {}
-    for model, v in LLM_MODELS.items():
-        score = (
-            WEIGHTS["latency"] * (1 - v["latency"]) +
-            WEIGHTS["cost"] * (1 - v["cost"]) +
-            WEIGHTS["domain_relevance"] * v["domain_relevance"]
-        )
-        scores[model] = round(score, 4)
-    return scores
-
-def select_best_model(scores):
-    return max(scores, key=scores.get)
-
-# -------------------------------
-# API CALLS
-# -------------------------------
-def call_openai(prompt):
+# ---------------- CHATGPT ----------------
+def call_chatgpt(prompt: str):
     try:
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -61,159 +88,126 @@ def call_openai(prompt):
 
         payload = {
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": prompt}]
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 200
         }
 
+        start = time.time()
         response = requests.post(OPENAI_URL, headers=headers, json=payload)
+        latency = time.time() - start
+
         data = response.json()
 
-        return data["choices"][0]["message"]["content"]
+        text = data.get("choices", [{}])[0].get("message", {}).get("content", "Error in response")
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+
+        return ModelResponse("ChatGPT", text, latency, tokens, data)
 
     except Exception as e:
-        return f"OpenAI Error: {str(e)}"
+        st.error(f"ChatGPT Error: {e}")
+        return None
 
-
-def call_gemini(prompt):
-    headers = {"Content-Type": "application/json"}
-
-    payload = {
-        "contents": [
-            {
-                "parts": [{"text": prompt}]
-            }
-        ]
-    }
-
+# ---------------- GEMINI ----------------
+def call_gemini(prompt: str):
     try:
-        response = requests.post(GEMINI_URL, headers=headers, json=payload)
+        headers = {"Content-Type": "application/json"}
 
-        # Debug (optional)
-        print("Status:", response.status_code)
-        print("Response:", response.text)
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 200
+            }
+        }
+
+        start = time.time()
+        response = requests.post(GEMINI_URL, headers=headers, json=payload)
+        latency = time.time() - start
 
         data = response.json()
 
-        # ✅ Success
-        if "candidates" in data:
-            candidate = data["candidates"][0]
-            content = candidate.get("content", {})
-            parts = content.get("parts", [])
+        text = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "Error in response")
+        )
 
-            if parts and "text" in parts[0]:
-                return parts[0]["text"]
-            else:
-                return "Gemini returned empty response."
+        tokens = data.get("usageMetadata", {}).get("totalTokenCount", 0)
 
-        # ❌ API error
-        elif "error" in data:
-            return f"Gemini API Error: {data['error'].get('message')}"
-
-        # ❌ Unexpected
-        else:
-            return f"Unexpected Gemini response: {data}"
+        return ModelResponse("Gemini Flash", text, latency, tokens, data)
 
     except Exception as e:
-        return f"Gemini request failed: {str(e)}"
+        st.error(f"Gemini Error: {e}")
+        return None
 
+# ---------------- COMPARISON ----------------
+def compare_models(prompt: str) -> List[ModelResponse]:
+    results = []
 
-# -------------------------------
-# EXECUTION (Single Model Only)
-# -------------------------------
-def execute_llm(model, prompt):
-    if model == "gpt-4":
-        return call_openai(prompt)
+    gpt = call_chatgpt(prompt)
+    gemini = call_gemini(prompt)
 
-    elif model == "gemini-pro":
-        return call_gemini(prompt)
+    if gpt:
+        results.append(gpt)
+    if gemini:
+        results.append(gemini)
 
+    return results
+
+# ---------------- INPUT SECTION ----------------
+st.markdown("### 🧠 Enter Your Prompt")
+user_input = st.text_area("Type your question or task:", height=120, placeholder="Example: Explain AI in simple terms")
+
+run_btn = st.button("🚀 Run Comparison")
+
+# ---------------- RESULTS ----------------
+if run_btn:
+    if not user_input.strip():
+        st.warning("⚠️ Please enter a prompt")
     else:
-        return f"[{model}] not connected yet"
+        with st.spinner("Analyzing models..."):
+            results = compare_models(user_input)
 
+        if len(results) == 0:
+            st.error("❌ No valid responses. Check API keys.")
+        else:
+            st.markdown("---")
+            st.markdown("## 📊 Model Comparison Results")
 
-# -------------------------------
-# CHAT PIPELINE
-# -------------------------------
-def chatbot(prompt, metadata):
+            cols = st.columns(len(results))
 
-    enriched_prompt = f"""
-    [User Tier: {metadata['user_tier']}]
-    [Region: {metadata['region']}]
-    [Domain: {metadata['domain']}]
+            for i, res in enumerate(results):
+                with cols[i]:
+                    st.markdown(f"### {res.model_name}")
+                    st.metric("⚡ Latency", f"{res.latency:.2f} sec")
+                    st.metric("🔢 Tokens", res.tokens_used)
 
-    {prompt}
-    """
+                    st.markdown("#### 💬 Response")
+                    st.write(res.response_text)
 
-    scores = score_models()
-    best_model = select_best_model(scores)
+                    st.markdown("#### 🛠 Debug Data")
+                    with st.expander("View Raw Response"):
+                        st.json(res.raw_response)
 
-    response = execute_llm(best_model, enriched_prompt)
+            if len(results) > 1:
+                fastest = min(results, key=lambda x: x.latency)
+                cheapest = min(results, key=lambda x: x.tokens_used)
 
-    return response, best_model, scores
+                st.markdown("---")
+                st.markdown("## 🏆 Insights")
+                st.success(f"⚡ Fastest Model: {fastest.model_name}")
+                st.info(f"💰 Most Efficient (Tokens): {cheapest.model_name}")
 
+# ---------------- FOOTER ----------------
+st.markdown("---")
+st.markdown("""
+### 📌 How to Use
+1. Enter your prompt
+2. Click **Run Comparison**
+3. View results side-by-side
+4. Expand debug section if needed
 
-# -------------------------------
-# STREAMLIT UI
-# -------------------------------
-st.set_page_config(page_title="LLM Router", layout="wide")
-
-st.title("🌍 Intelligent LLM Routing Chatbot")
-
-# Sidebar
-st.sidebar.header("⚙️ Configuration")
-
-domain = st.sidebar.selectbox(
-    "Domain",
-    ["coding", " legal ", " healthcare ","finance"]   # ❌ removed "general"
-)
-
-user_tier = st.sidebar.selectbox(
-    "User Tier",
-    ["free", "pro"]
-)
-
-region = st.sidebar.selectbox(
-    "Region",
-    ["global", "asia"]
-)
-
-# Chat
-st.subheader("💬 Chat")
-
-user_input = st.text_input("Enter your prompt:")
-
-if st.button("Send"):
-
-    metadata = {
-        "domain": domain,
-        "user_tier": user_tier,
-        "region": region
-    }
-
-    response, selected_model, scores = chatbot(user_input, metadata)
-
-    # Response
-    st.subheader("🤖 Response")
-    st.write(response)
-
-    # Selected Model
-    st.subheader("🏆 Selected Model")
-    st.success(selected_model)
-
-    # Scores
-    st.subheader("📊 Model Scores")
-
-    score_data = []
-    for model, score in scores.items():
-        score_data.append({
-            "Model": model,
-            "Score": score,
-            "Latency": LLM_MODELS[model]["latency"],
-            "Cost": LLM_MODELS[model]["cost"],
-            "Domain Relevance": LLM_MODELS[model]["domain_relevance"]
-        })
-
-    st.dataframe(score_data, use_container_width=True)
-
-    # Chart
-    st.subheader("📈 Score Visualization")
-    st.bar_chart({model: score for model, score in scores.items()})
+---
+Built with ❤️ by NIIVA Team 
+""")
