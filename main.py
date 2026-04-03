@@ -25,10 +25,8 @@ GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-fl
 # -------------------------------
 LLM_MODELS = {
     "gpt-4": {"latency": 0.7, "cost": 0.9, "domain_relevance": 0.95},
-   /* "claude-3": {"latency": 0.6, "cost": 0.85, "domain_relevance": 0.92}, */
     "gemini-pro": {"latency": 0.5, "cost": 0.6, "domain_relevance": 0.88},
-   /* "mistral-large": {"latency": 0.4, "cost": 0.5, "domain_relevance": 0.80}, */
-    /* "llama-3": {"latency": 0.3, "cost": 0.4, "domain_relevance": 0.75} */
+
 }
 
 WEIGHTS = {"latency": 0.3, "cost": 0.3, "domain_relevance": 0.4}
