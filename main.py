@@ -163,7 +163,7 @@ st.sidebar.header("⚙️ Configuration")
 
 domain = st.sidebar.selectbox(
     "Domain",
-    ["coding", "finance"]   # ❌ removed "general"
+    ["coding", " legal ", " healthcare ","finance"]   # ❌ removed "general"
 )
 
 user_tier = st.sidebar.selectbox(
