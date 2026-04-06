@@ -26,10 +26,17 @@ GEMINI_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-fl
 # -------------------------------
 LLM_MODELS = {
     "gpt-4o-mini": {"latency": 0.7, "cost": 0.9, "domain_relevance": 0.95},
-    "gemini-flash": {"latency": 0.5, "cost": 0.6, "domain_relevance": 0.88}
+    "gemini-pro": {"latency": 0.5, "cost": 0.6, "domain_relevance": 0.88},
+    "claude-3": {"latency": 0.6, "cost": 0.85, "domain_relevance": 0.92},
+    "mistral-large": {"latency": 0.4, "cost": 0.5, "domain_relevance": 0.80},
+    "llama-3": {"latency": 0.3, "cost": 0.4, "domain_relevance": 0.75}
 }
 
-WEIGHTS = {"latency": 0.3, "cost": 0.3, "domain_relevance": 0.4}
+WEIGHTS = {
+    "latency": 0.3,
+    "cost": 0.3,
+    "domain_relevance": 0.4
+}
 
 # -------------------------------
 # INPUT VALIDATION
@@ -57,6 +64,7 @@ def score_models():
         scores[model] = round(score, 4)
     return scores
 
+
 def select_best_model(scores):
     return max(scores, key=scores.get)
 
@@ -69,7 +77,7 @@ def safe_post(url, headers, payload):
             url,
             headers=headers,
             json=payload,
-            timeout=10  # Prevent hanging
+            timeout=10
         )
 
         if response.status_code != 200:
@@ -145,24 +153,68 @@ def call_gemini(prompt):
         return str(ve)
 
 # -------------------------------
+# PLACEHOLDER APIs (Extend Later)
+# -------------------------------
+def call_claude(prompt):
+    return "Claude API not integrated yet"
+
+
+def call_mistral(prompt):
+    return "Mistral API not integrated yet"
+
+
+def call_llama(prompt):
+    return "LLaMA API not integrated yet"
+
+# -------------------------------
+# ROUTER
+# -------------------------------
+def route_request(model, prompt):
+    if model == "gpt-4o-mini":
+        return call_openai(prompt)
+
+    elif model == "gemini-pro":
+        return call_gemini(prompt)
+
+    elif model == "claude-3":
+        return call_claude(prompt)
+
+    elif model == "mistral-large":
+        return call_mistral(prompt)
+
+    elif model == "llama-3":
+        return call_llama(prompt)
+
+    else:
+        return "Model not supported"
+
+# -------------------------------
 # STREAMLIT UI
 # -------------------------------
-st.title("Multi-LLM Chatbot")
+st.title("Multi-LLM Chatbot Router")
 
 user_input = st.text_input("Enter your prompt:")
 
 if st.button("Submit"):
     if user_input:
-        scores = score_models()
-        best_model = select_best_model(scores)
+        try:
+            validated_prompt = validate_prompt(user_input)
 
-        st.write(f"Selected Model: {best_model}")
+            scores = score_models()
+            best_model = select_best_model(scores)
 
-        if best_model == "gpt-4o-mini":
-            response = call_openai(user_input)
-        else:
-            response = call_gemini(user_input)
+            st.write("### Model Scores")
+            st.json(scores)
 
-        st.write(response)
+            st.success(f"Selected Model: {best_model}")
+
+            response = route_request(best_model, validated_prompt)
+
+            st.write("### Response")
+            st.write(response)
+
+        except ValueError as e:
+            st.error(str(e))
     else:
         st.warning("Please enter a prompt")
+        
