@@ -307,10 +307,7 @@ User Query:
 # ---------------- RELEVANCE ----------------
 def relevance(prompt, response):
     try:
-        score = len(set(prompt.lower().split()) & set(response.lower().split()))
-        return min(score / 10, 1.0)
-    except:
-        return 0.0
+        score = len(set(prompt.lower().split()) & set(response.lower()
 
 # ---------------- MODEL CALLS ----------------
 def call_chatgpt(prompt, domain, intent):
