@@ -292,17 +292,14 @@ def detect_intent(prompt, domain):
     return "General"
 
 # ---------------- CONTEXT ENRICHMENT ----------------
-def enrich_prompt(prompt, domain, intent):
-    return f"""
-You are an expert in {domain}.
+def ch_prompt(prompt,intent):
+    retu
+You are an expert in {in}.
 
-Task: {intent}
 
 Provide a clear, structured, and helpful response.
 
-User Query:
-{prompt}
-"""
+Us
 
 # ---------------- RELEVANCE ----------------
 def relevance(prompt, response):
