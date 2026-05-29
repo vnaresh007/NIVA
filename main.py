@@ -376,10 +376,7 @@ def compute_scores(results: List[ModelResponse]):
         r.latency_score = 1 - (r.latency / max_latency) if max_latency else 0
         r.cost_score = 1 - (r.tokens_used / max_tokens) if max_tokens else 0
 
-        r.final_score = (
-            W_RELEVANCE * r.relevance_score +
-            W_LATENCY * r.latency_score +
-            W_COST * r.cost_score
+        
         )
 
 # ---------------- MAIN ----------------
@@ -390,8 +387,8 @@ if run_btn:
     else:
         with st.spinner("Processing..."):
 
-            domain = detect_domain(user_input)
-            intent = detect_intent(user_input, domain)
+        
+            intent = detect_intent(user_input)
 
             st.success(f"🧠 Domain: {domain} | Intent: {intent}")
 
